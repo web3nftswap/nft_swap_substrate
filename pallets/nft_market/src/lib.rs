@@ -52,10 +52,16 @@ pub mod pallet {
         pub enum Event<T: Config> {
             /// An NFT was listed.
             NftListed(T::AccountId, NftItem),
+            /// An NFT was unlisted.
+            NftUnlisted(T::AccountId, NftItem),
             /// An NFT offer was palced.
             OfferPlaced(NftItem, T::AccountId, NftItem), // listed, offered
+            /// An NFT offer was palced.
+            OfferCanceled(NftItem, T::AccountId, NftItem), // listed, offered
             /// An NFT offer was accepted.
             OfferAccepted(T::AccountId, NftItem, T::AccountId, NftItem), // listed, offered
+            /// An NFT offer was rejected.
+            OfferRejected(T::AccountId, NftItem, T::AccountId, NftItem), // listed, offered
         }
 
         #[pallet::error]
@@ -96,6 +102,29 @@ pub mod pallet {
                 Ok(())
             }
 
+            /// Unlist an NFT.
+            ///
+            /// The origin must be signed.
+            ///
+            /// Parameters:
+            /// - `nft_item`: The NFT to be unlisted.
+            ///
+            /// Emits `NftUnlisted` event when successful.
+            #[pallet::call_index(1)]
+            #[pallet::weight({0})]
+            pub fn unlist_nft(origin: OriginFor<T>, nft_item: NftItem) -> DispatchResult {
+                let sender = ensure_signed(origin)?;
+                let owner = NFTOwners::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                ensure!(owner == sender, Error::<T>::NotOwner);
+
+                Listings::<T>::remove(nft_item);
+                Offers::<T>::remove(nft_item);
+
+                Self::deposit_event(Event::NftUnlisted(sender, nft_item));
+
+                Ok(())
+            }
+
             /// Provide an offer to buy an NFT.
             ///
             /// The origin must be signed.
@@ -105,7 +134,7 @@ pub mod pallet {
             /// - `offer_nft_item`: The NFT that needs to be used as an offer.
             ///
             /// Emits `OfferPlaced` event when successful.
-            #[pallet::call_index(1)]
+            #[pallet::call_index(2)]
             #[pallet::weight({0})]
             pub fn place_offer(origin: OriginFor<T>, nft_item: NftItem, offer_nft_item: NftItem) -> DispatchResult {
                 let sender = ensure_signed(origin)?;
@@ -127,6 +156,46 @@ pub mod pallet {
                 Ok(())
             }
 
+            /// Cancel an NFT offer.
+            ///
+            /// The origin must be signed.
+            ///
+            /// Parameters:
+            /// - `nft_item`: The NFT to be purchased.
+            /// - `offer_nft_item`: The NFT that needs to be used as an offer.
+            ///
+            /// Emits `OfferCanceled` event when successful.
+            #[pallet::call_index(3)]
+            #[pallet::weight({0})]
+            pub fn cancel_offer(origin: OriginFor<T>, nft_item: NftItem, offer_nft_item: NftItem) -> DispatchResult {
+                let sender = ensure_signed(origin)?;
+                ensure!(Listings::<T>::contains_key(nft_item), Error::<T>::NotListed);
+
+                let owner = NFTOwners::<T>::get(offer_nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                ensure!(owner == sender, Error::<T>::NotOwner);
+
+                //let mut offers = Offers::<T>::get(nft_item).ok_or(Error::<T>::NotOffered)?;
+                //if let Some(index) = offers.iter().position(|&x| x == offer_nft_item) {
+                //    offers.remove(index);
+                //} else {
+                //    return Err(Error::<T>::NotOffered.into());
+                //}
+
+                Offers::<T>::mutate(nft_item, |offer_items| {
+                    if let Some(offer_items_value) = offer_items {
+                        if let Some(index) = offer_items_value.iter().position(|&x| x == offer_nft_item) {
+                            offer_items_value.remove(index);
+                        } else {
+                            return Err(Error::<T>::NotOffered);
+                        }
+                    }
+                    Ok(())
+                })?;
+
+                Self::deposit_event(Event::OfferCanceled(nft_item, sender, offer_nft_item));
+                Ok(())
+            }
+
             /// Accept an offer.
             ///
             /// The origin must be signed.
@@ -136,7 +205,7 @@ pub mod pallet {
             /// - `offer_nft_item`: The NFT that used as an offer.
             ///
             /// Emits `OfferAccepted` event when successful.
-            #[pallet::call_index(2)]
+            #[pallet::call_index(4)]
             #[pallet::weight({0})]
             pub fn accept_offer(origin: OriginFor<T>, nft_item: NftItem, offer_nft_item: NftItem) -> DispatchResult {
                 let sender = ensure_signed(origin.clone())?;
@@ -161,6 +230,39 @@ pub mod pallet {
                 Offers::<T>::remove(nft_item);
 
                 Self::deposit_event(Event::OfferAccepted(seller, nft_item, buyer, offer_nft_item));
+
+                Ok(())
+            }
+
+            /// Reject an offer.
+            ///
+            /// The origin must be signed.
+            ///
+            /// Parameters:
+            /// - `nft_item`: The NFT for sale.
+            /// - `offer_nft_item`: The NFT that used as an offer.
+            ///
+            /// Emits `OfferRejected` event when successful.
+            #[pallet::call_index(5)]
+            #[pallet::weight({0})]
+            pub fn reject_offer(origin: OriginFor<T>, nft_item: NftItem, offer_nft_item: NftItem) -> DispatchResult {
+                let sender = ensure_signed(origin.clone())?;
+                let seller = Listings::<T>::get(nft_item).ok_or(Error::<T>::NotListed)?;
+                ensure!(seller == sender, Error::<T>::NotOwner);
+
+                let buyer = NFTOwners::<T>::get(offer_nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                Offers::<T>::mutate(nft_item, |offer_items| {
+                    if let Some(offer_items_value) = offer_items {
+                        if let Some(index) = offer_items_value.iter().position(|&x| x == offer_nft_item) {
+                            offer_items_value.remove(index);
+                        } else {
+                            return Err(Error::<T>::NotOffered);
+                        }
+                    }
+                    Ok(())
+                })?;
+
+                Self::deposit_event(Event::OfferRejected(seller, nft_item, buyer, offer_nft_item));
 
                 Ok(())
             }
