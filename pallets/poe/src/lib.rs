@@ -3,6 +3,18 @@
 /// A module for proof of existence
 pub use pallet::*;
 
+#[cfg(test)]
+mod mock;
+
+pub mod weights;
+pub use weights::*;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 #[frame_support::pallet]
 pub mod pallet {
 	use super::*;
@@ -16,6 +28,8 @@ pub mod pallet {
 		type MaxClaimLength: Get<u32>;
 		/// The runtime event
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+		/// Weights required by the dispatchables
+		type WeightInfo: WeightInfo;
 	}
 
 	#[pallet::pallet]
@@ -50,7 +64,7 @@ pub mod pallet {
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
 		#[pallet::call_index(0)]
-		#[pallet::weight({0})]
+		#[pallet::weight(T::WeightInfo::create_claim(claim.len() as u32))]
 		pub fn create_claim(origin: OriginFor<T>, claim: BoundedVec<u8, T::MaxClaimLength>) -> DispatchResultWithPostInfo {
 			let sender = ensure_signed(origin)?;
 
@@ -67,7 +81,7 @@ pub mod pallet {
 		}
 
 		#[pallet::call_index(1)]
-		#[pallet::weight({0})]
+		#[pallet::weight(T::WeightInfo::revoke_claim(claim.len() as u32))]
 		pub fn revoke_claim(origin: OriginFor<T>, claim: BoundedVec<u8, T::MaxClaimLength>) -> DispatchResultWithPostInfo {
 			let sender = ensure_signed(origin)?;
 
@@ -82,7 +96,7 @@ pub mod pallet {
 		}
 
 		#[pallet::call_index(2)]
-		#[pallet::weight({0})]
+		#[pallet::weight(T::WeightInfo::transfer_claim(claim.len() as u32))]
 		pub fn transfer_claim(
 			origin: OriginFor<T>,
 			claim: BoundedVec<u8, T::MaxClaimLength>,
