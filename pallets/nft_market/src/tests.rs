@@ -19,8 +19,13 @@ fn list_nft() {
         let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id), collection_id, metainfo1.clone()));
 
-        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id), (collection_id, 0)));
-        assert_eq!(Listings::<Test>::get((collection_id, 0)), Some(account_id));
+        let price = 10_000_000;
+        let list_info = ListInfo {
+            price,
+            owner: account_id.clone(),
+        };
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id), (collection_id, 0), price));
+        assert_eq!(Listings::<Test>::get((collection_id, 0)), Some(list_info));
     })
 }
 
@@ -38,12 +43,12 @@ fn list_nft_fail_when_not_owner() {
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
 
         assert_noop!(
-            NftMarketModule::list_nft(RuntimeOrigin::signed(account_id1), (collection_id, 0)),
+            NftMarketModule::list_nft(RuntimeOrigin::signed(account_id1), (collection_id, 0), 0),
             Error::<Test>::NotOwner
         );
 
         assert_noop!(
-            NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 1)),
+            NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 1), 0),
             Error::<Test>::NFTNotFound
         );
     })
@@ -62,8 +67,13 @@ fn unlist_nft() {
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id), collection_id, metainfo1.clone()));
 
         let nft_item = (collection_id, 0);
-        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id), nft_item));
-        assert_eq!(Listings::<Test>::get(nft_item), Some(account_id));
+        let price = 10_000_000;
+        let list_info = ListInfo {
+            price,
+            owner: account_id.clone(),
+        };
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id), nft_item, price));
+        assert_eq!(Listings::<Test>::get(nft_item), Some(list_info));
         assert_ok!(NftMarketModule::unlist_nft(RuntimeOrigin::signed(account_id), nft_item));
         assert_eq!(Listings::<Test>::get(nft_item), None);
     })
@@ -81,7 +91,7 @@ fn place_offer() {
         let collection_id = H256::from_slice(&blake2_256(&metainfo.clone()));
         let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
-        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0)));
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0), 0));
 
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id1), collection_id, metainfo1.clone()));
         let token_amount: u128 = 10;
@@ -111,7 +121,7 @@ fn place_offer_fail_with_wrong_nft() {
         let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
-        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0)));
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0), 0));
 
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id1), collection_id, metainfo1.clone()));
 
@@ -152,7 +162,7 @@ fn cancel_offer() {
         let collection_id = H256::from_slice(&blake2_256(&metainfo.clone()));
         let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
-        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0)));
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0), 0));
 
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id1), collection_id, metainfo1.clone()));
         let token_amount: u128 = 0;
@@ -177,7 +187,7 @@ fn accept_offer() {
         let collection_id = H256::from_slice(&blake2_256(&metainfo.clone()));
         let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
-        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0)));
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0), 0));
 
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id1), collection_id, metainfo1.clone()));
         let token_amount: u128 = 20;
@@ -202,7 +212,7 @@ fn accept_offer_fail_with_insufficient_balance() {
         let collection_id = H256::from_slice(&blake2_256(&metainfo.clone()));
         let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
-        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0)));
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0), 0));
 
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id1), collection_id, metainfo1.clone()));
         let token_amount: u128 = 200000000;
@@ -230,7 +240,7 @@ fn reject_offer() {
         let collection_id = H256::from_slice(&blake2_256(&metainfo.clone()));
         let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
-        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0)));
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0), 0));
 
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id1), collection_id, metainfo1.clone())); // id1
         assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id1), collection_id, metainfo1.clone())); // id2
@@ -255,3 +265,43 @@ fn reject_offer() {
     })
 }
 
+#[test]
+fn buy_nft() {
+    new_test_ext().execute_with(|| {
+        let account_id0: AccountId = 1;
+        let account_id1: AccountId = 2;
+        let max_items: u32 = 100;
+        let metainfo = BoundedVec::try_from(vec![0, 1]).unwrap();
+        assert_ok!(NftModule::create_collection(RuntimeOrigin::signed(account_id0), max_items, metainfo.clone()));
+        
+        let collection_id = H256::from_slice(&blake2_256(&metainfo.clone()));
+        let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
+        assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0), 200000));
+        assert_ok!(NftMarketModule::buy_nft(RuntimeOrigin::signed(account_id1), (collection_id, 0)));
+
+        assert_eq!(NFTOwners::<Test>::get((collection_id, 0)), Some(account_id1));
+    })
+}
+
+#[test]
+fn buy_nft_fail_when_insufficient_balance() {
+    new_test_ext().execute_with(|| {
+        let account_id0: AccountId = 1;
+        let account_id1: AccountId = 2;
+        let max_items: u32 = 100;
+        let metainfo = BoundedVec::try_from(vec![0, 1]).unwrap();
+        assert_ok!(NftModule::create_collection(RuntimeOrigin::signed(account_id0), max_items, metainfo.clone()));
+        
+        let collection_id = H256::from_slice(&blake2_256(&metainfo.clone()));
+        let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
+        assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id0), collection_id, metainfo1.clone()));
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id0), (collection_id, 0), 2000000));
+        assert_noop!(
+            NftMarketModule::buy_nft(RuntimeOrigin::signed(account_id1), (collection_id, 0)),
+            Error::<Test>::InsufficientBalance
+        );
+
+        assert_eq!(NFTOwners::<Test>::get((collection_id, 0)), Some(account_id0));
+    })
+}
