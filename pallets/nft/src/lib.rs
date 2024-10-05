@@ -16,11 +16,13 @@ pub mod pallet {
         use sp_core::hashing::blake2_256;
         use sp_core::H256;
         use frame_support::pallet_prelude::*;
-        type MaxSubNftsLength = ConstU32<5>;
+        type MaxSubNftsLength = ConstU32<10>;
+        type MaxNftOwners = ConstU32<10>;
         type MaxMetadataLength = ConstU32<16>;
         type MaxCollectionsLength = ConstU32<100>;
         type MaxNftsLength = ConstU32<10000>;
         type NftItem = (H256, u32);
+        type NftItemWithShare = (H256, u32, u8);
 
         #[pallet::config]
         pub trait Config: frame_system::Config {
@@ -49,13 +51,13 @@ pub mod pallet {
             _,
             Blake2_128Concat,
             T::AccountId,
-            BoundedVec<NftItem, MaxNftsLength>, // collection, item_id
+            BoundedVec<NftItemWithShare, MaxNftsLength>, // (collection, item_id, share)
         >;
 
         #[derive(Clone, Encode, Decode, PartialEq, Eq, RuntimeDebug, MaxEncodedLen, TypeInfo)]
         pub struct NftInfo {
-            pub merged_nft: Option<NftItem>,
-            pub sub_nfts: BoundedVec<NftItem, MaxSubNftsLength>, // sub nfts
+            pub merged_nft: Option<NftItem>, // for sub nft, record merged nft
+            pub sub_nfts: BoundedVec<NftItem, MaxSubNftsLength>, // for merged nft, record sub nfts
             pub metadata: BoundedVec<u8, MaxMetadataLength>, // nft metadata
         }
 
@@ -74,7 +76,7 @@ pub mod pallet {
             _,
             Blake2_128Concat,
             NftItem,
-            T::AccountId, // nft owner
+            BoundedVec<T::AccountId, MaxNftOwners>, // nft owners
         >;
 
         #[pallet::event]
@@ -118,6 +120,10 @@ pub mod pallet {
             NFTIsNotTheMerged,
             /// The NFT is frozen.
             NFTIsFrozen,
+            /// The NFT has not enough share.
+            NFTNotEnoughShare,
+            /// The NFT can not be merged or splited.
+            NFTCanNotMergeOrSplit,
         }
 
         #[pallet::call]
@@ -174,12 +180,13 @@ pub mod pallet {
                 ensure!(cur_item_index < max_items, Error::<T>::NFTExceeds);
 
                 let nft_item = (collection_id, cur_item_index);
+                let nft_item_with_share = (collection_id, cur_item_index, 100);
                 OwnedNFTs::<T>::mutate(&sender, |nfts| {
                     if nfts.is_none() {
-                        *nfts = Some(BoundedVec::<NftItem, MaxNftsLength>::default());
+                        *nfts = Some(BoundedVec::<NftItemWithShare, MaxNftsLength>::default());
                     }
                     if let Some(nfts_value) = nfts {
-                        nfts_value.try_push(nft_item).unwrap_or_default();
+                        nfts_value.try_push(nft_item_with_share).unwrap_or_default();
                     }
                 });
 
@@ -189,7 +196,14 @@ pub mod pallet {
                     metadata: metadata,
                 };
                 NFTDetails::<T>::insert(nft_item, nft_info);
-                NFTOwners::<T>::insert(nft_item, sender.clone());
+                NFTOwners::<T>::mutate(&nft_item, |accounts| {
+                    if accounts.is_none() {
+                        *accounts = Some(BoundedVec::<T::AccountId, MaxNftOwners>::default());
+                    }
+                    if let Some(accounts_value) = accounts {
+                        accounts_value.try_push(sender.clone()).unwrap_or_default();
+                    }
+                });
                 NFTCollections::<T>::insert(&collection_id, (max_items, cur_item_index + 1, collection_metadata));
 
                 Self::deposit_event(Event::NFTMinted(sender, nft_item));
@@ -207,29 +221,55 @@ pub mod pallet {
             /// Emits `NFTTransferred` event when successful.
             #[pallet::call_index(2)]
             #[pallet::weight({0})]
-            pub fn transfer_nft(origin: OriginFor<T>, to: T::AccountId, nft_item: NftItem) -> DispatchResult {
+            pub fn transfer_nft(origin: OriginFor<T>, to: T::AccountId, nft_item: NftItem, share: u8) -> DispatchResult {
                 let sender = ensure_signed(origin)?;
 
+                // Retrieve NFT details and ensure the NFT exists
                 let nft_details = NFTDetails::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
                 if let Some(merged_nft) = nft_details.merged_nft {
                     ensure!(merged_nft == nft_item, Error::<T>::NFTIsFrozen);
                 }
 
-                let mut owned_nfts = OwnedNFTs::<T>::get(&sender).ok_or(Error::<T>::NFTNotFound)?;
-                ensure!(owned_nfts.contains(&nft_item), Error::<T>::NotOwner);
-                owned_nfts.retain(|&nft| nft != nft_item);
-                OwnedNFTs::<T>::insert(&sender, owned_nfts);
+                // Retrieve sender's owned NFTs
+                let mut sender_owned_nfts = OwnedNFTs::<T>::get(&sender).ok_or(Error::<T>::NFTNotFound)?;
+                let sender_nft_item_with_share_index = sender_owned_nfts.iter()
+                    .position(|&nft| nft.0 == nft_item.0 && nft.1 == nft_item.1)
+                    .ok_or(Error::<T>::NotOwner)?;
+                let sender_nft_item_with_share = sender_owned_nfts[sender_nft_item_with_share_index];
+                ensure!(sender_nft_item_with_share.2 >= share, Error::<T>::NFTNotEnoughShare);
 
-                OwnedNFTs::<T>::mutate(&to, |nfts| {
-                    if nfts.is_none() {
-                        *nfts = Some(BoundedVec::<NftItem, MaxNftsLength>::default());
-                    }
-                    if let Some(nfts_value) = nfts {
-                        nfts_value.try_push(nft_item).unwrap_or_default();
-                    }
-                });
+                let mut remove_sender_nft = false;
+                // Update sender's owned NFTs
+                if sender_nft_item_with_share.2 == share {
+                    sender_owned_nfts.remove(sender_nft_item_with_share_index);
+                    remove_sender_nft = true;
+                } else {
+                    sender_owned_nfts[sender_nft_item_with_share_index].2 -= share;
+                }
+                OwnedNFTs::<T>::insert(&sender, sender_owned_nfts);
 
-                NFTOwners::<T>::insert(nft_item, to.clone());
+                // Retrieve receiver's owned NFTs
+                let mut receiver_owned_nfts = OwnedNFTs::<T>::get(&to).unwrap_or_default();
+                let receiver_nft_item_with_share = receiver_owned_nfts.iter_mut()
+                    .find(|nft| nft.0 == nft_item.0 && nft.1 == nft_item.1);
+            
+                // Update receiver's owned NFTs
+                if let Some(nft_item_with_share) = receiver_nft_item_with_share {
+                    nft_item_with_share.2 += share;
+                } else {
+                    receiver_owned_nfts.try_push((nft_item.0, nft_item.1, share)).unwrap_or_default();
+                }
+                OwnedNFTs::<T>::insert(&to, receiver_owned_nfts);
+            
+                // Update NFT owners
+                let mut nft_owners = NFTOwners::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                if !nft_owners.contains(&to) {
+                    nft_owners.try_push(to.clone()).unwrap_or_default();
+                }
+                if remove_sender_nft {
+                    nft_owners.retain(|owner| *owner != sender);
+                }
+                NFTOwners::<T>::insert(&nft_item, nft_owners);
 
                 Self::deposit_event(Event::NFTTransferred(sender, to, nft_item));
                 Ok(())
@@ -255,6 +295,8 @@ pub mod pallet {
                         }
                     }
 
+                    let accounts = NFTOwners::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                    ensure!(accounts.len() == 1, Error::<T>::NFTCanNotMergeOrSplit);
                     nft_details.merged_nft = Some(merged_nft);
                     NFTDetails::<T>::mutate(nft_item, |details_wrap| {
                         if let Some(details) = details_wrap {
@@ -281,6 +323,9 @@ pub mod pallet {
                 if let Some(merged_nft) = nft_details.merged_nft {
                     ensure!(nft_item == merged_nft, Error::<T>::NFTIsNotTheMerged);
                 }
+
+                let accounts = NFTOwners::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                ensure!(accounts.len() == 1, Error::<T>::NFTCanNotMergeOrSplit);
 
                 for (index, sub_nft_item) in sub_nfts.iter().enumerate() {
                     NFTDetails::<T>::mutate(sub_nft_item, |details_wrap| {

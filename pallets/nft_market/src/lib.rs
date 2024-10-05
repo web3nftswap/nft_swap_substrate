@@ -20,10 +20,10 @@ pub mod pallet {
         use sp_core::H256;
         use scale_info::TypeInfo;
         use scale_info::prelude::fmt;
-        use pallet_nft::{Pallet as NftPallet, NFTOwners};
+        use pallet_nft::{Pallet as NftPallet, NFTOwners, OwnedNFTs};
         type MaxNftsLength = ConstU32<10000>;
         type MaxOfferNftsLength = ConstU32<10>;
-        type NftItem = (H256, u32);
+        type NftItemWithShare = (H256, u32, u8);
         pub type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
 
@@ -39,8 +39,9 @@ pub mod pallet {
 
         #[derive(Clone, Encode, Decode, PartialEq, Eq, RuntimeDebug, MaxEncodedLen, TypeInfo)]
         pub struct Offer<T: Config> {
-            pub offered_nfts: BoundedVec<NftItem, MaxOfferNftsLength>,
+            pub offered_nfts: BoundedVec<NftItemWithShare, MaxOfferNftsLength>,
             pub token_amount: BalanceOf<T>,
+            pub buyer: T::AccountId,
         }
 
         #[derive(Clone, Encode, Decode, PartialEq, Eq, RuntimeDebug, MaxEncodedLen, TypeInfo)]
@@ -51,19 +52,23 @@ pub mod pallet {
 
         /// The listed NFTs and their owners
         #[pallet::storage]
-        pub type Listings<T: Config> = StorageMap<
+        pub type Listings<T: Config> = StorageDoubleMap<
             _,
             Twox64Concat,
-            NftItem,
+            NftItemWithShare,
+            Twox64Concat,
+            T::AccountId,
             ListInfo<T>,
         >;
 
         /// Offer for listed NFTs
         #[pallet::storage]
-        pub type Offers<T: Config> = StorageMap<
+        pub type Offers<T: Config> = StorageDoubleMap<
             _,
             Twox64Concat,
-            NftItem,
+            NftItemWithShare,
+            Twox64Concat,
+            T::AccountId,
             BoundedVec<Offer<T>, MaxNftsLength>,
         >;
 
@@ -71,19 +76,19 @@ pub mod pallet {
         #[pallet::generate_deposit(pub(super) fn deposit_event)]
         pub enum Event<T: Config> {
             /// An NFT was listed.
-            NftListed(T::AccountId, NftItem),
+            NftListed(T::AccountId, NftItemWithShare),
             /// An NFT was unlisted.
-            NftUnlisted(T::AccountId, NftItem),
+            NftUnlisted(T::AccountId, NftItemWithShare),
             /// Buy NFT success.
-            BuySuccess(NftItem, T::AccountId, BalanceOf<T>),
+            BuySuccess(NftItemWithShare, T::AccountId, BalanceOf<T>),
             /// An NFT offer was palced.
-            OfferPlaced(NftItem, T::AccountId, Offer<T>),
+            OfferPlaced(NftItemWithShare, T::AccountId, Offer<T>),
             /// An NFT offer was palced.
-            OfferCanceled(NftItem, T::AccountId, Offer<T>),
+            OfferCanceled(NftItemWithShare, T::AccountId, Offer<T>),
             /// An NFT offer was accepted.
-            OfferAccepted(T::AccountId, NftItem, T::AccountId, Offer<T>),
+            OfferAccepted(T::AccountId, NftItemWithShare, T::AccountId, Offer<T>),
             /// An NFT offer was rejected.
-            OfferRejected(T::AccountId, NftItem, T::AccountId, Offer<T>),
+            OfferRejected(T::AccountId, NftItemWithShare, T::AccountId, Offer<T>),
         }
 
         #[pallet::error]
@@ -100,6 +105,8 @@ pub mod pallet {
             NotOffered,
             /// Token amount is insufficient.
             InsufficientBalance,
+            /// The share of NFT is not enough.
+            ShareNotEnough,
         }
 
         #[pallet::call]
@@ -114,18 +121,24 @@ pub mod pallet {
             /// Emits `NftListed` event when successful.
             #[pallet::call_index(0)]
             #[pallet::weight({0})]
-            pub fn list_nft(origin: OriginFor<T>, nft_item: NftItem, price: BalanceOf<T>) -> DispatchResult {
+            pub fn list_nft(origin: OriginFor<T>, nft_item_with_share: NftItemWithShare, price: BalanceOf<T>) -> DispatchResult {
                 let sender = ensure_signed(origin)?;
-                let owner = NFTOwners::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
-                ensure!(owner == sender, Error::<T>::NotOwner);
+                let nft_item = (nft_item_with_share.0, nft_item_with_share.1);
+                let share = nft_item_with_share.2;
+                ensure!(NFTOwners::<T>::contains_key(nft_item), Error::<T>::NFTNotFound);
+                let owned_nfts_with_share = OwnedNFTs::<T>::get(sender.clone()).ok_or(Error::<T>::NotOwner)?;
+                let owned_nft_with_share = owned_nfts_with_share.iter().find(|owned_nft| {
+                    owned_nft.0 == nft_item.0 && owned_nft.1 == nft_item.1}).ok_or(Error::<T>::NotOwner)?;
+                ensure!(owned_nft_with_share.2 >= share, Error::<T>::ShareNotEnough);
 
                 let list_info = ListInfo {
                     owner: sender.clone(),
                     price,
                 };
-                Listings::<T>::insert(nft_item, &list_info);
+                let nft_item_with_share = (nft_item.0, nft_item.1, share);
+                Listings::<T>::insert(nft_item_with_share, sender.clone(), &list_info);
 
-                Self::deposit_event(Event::NftListed(sender, nft_item));
+                Self::deposit_event(Event::NftListed(sender.clone(), nft_item_with_share));
 
                 Ok(())
             }
@@ -140,15 +153,15 @@ pub mod pallet {
             /// Emits `NftUnlisted` event when successful.
             #[pallet::call_index(1)]
             #[pallet::weight({0})]
-            pub fn unlist_nft(origin: OriginFor<T>, nft_item: NftItem) -> DispatchResult {
+            pub fn unlist_nft(origin: OriginFor<T>, nft_item_with_share: NftItemWithShare) -> DispatchResult {
                 let sender = ensure_signed(origin)?;
-                let owner = NFTOwners::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
-                ensure!(owner == sender, Error::<T>::NotOwner);
+                let nft_item = (nft_item_with_share.0, nft_item_with_share.1);
+                ensure!(NFTOwners::<T>::contains_key(nft_item), Error::<T>::NFTNotFound);
 
-                Listings::<T>::remove(nft_item);
-                Offers::<T>::remove(nft_item);
+                Listings::<T>::remove(nft_item_with_share, sender.clone());
+                Offers::<T>::remove(nft_item_with_share, sender.clone());
 
-                Self::deposit_event(Event::NftUnlisted(sender, nft_item));
+                Self::deposit_event(Event::NftUnlisted(sender, nft_item_with_share));
 
                 Ok(())
             }
@@ -163,21 +176,21 @@ pub mod pallet {
             /// Emits `BuySucess` event when successful.
             #[pallet::call_index(2)]
             #[pallet::weight({0})]
-            pub fn buy_nft(origin: OriginFor<T>,
-                           nft_item: NftItem) -> DispatchResult {
+            pub fn buy_nft(origin: OriginFor<T>, nft_item_with_share: NftItemWithShare, seller: T::AccountId) -> DispatchResult {
                 let buyer = ensure_signed(origin.clone())?;
-                let list_info = Listings::<T>::get(nft_item).ok_or(Error::<T>::NotListed)?;
-                let seller = list_info.owner;
+                let nft_item = (nft_item_with_share.0, nft_item_with_share.1);
+                let share = nft_item_with_share.2;
+                let list_info = Listings::<T>::get(nft_item_with_share, seller.clone()).ok_or(Error::<T>::NotListed)?;
                 let buyer_balance = T::Currency::free_balance(&buyer.clone());
 
                 ensure!(buyer_balance >= list_info.price, Error::<T>::InsufficientBalance);
                 T::Currency::transfer(&buyer.clone(), &seller.clone(), list_info.price, frame_support::traits::ExistenceRequirement::AllowDeath)?;
                 let seller_origin = frame_system::RawOrigin::Signed(seller.clone()).into();
-                NftPallet::<T>::transfer_nft(seller_origin, buyer.clone(), nft_item)?;
+                NftPallet::<T>::transfer_nft(seller_origin, buyer.clone(), nft_item, share)?;
 
-                Listings::<T>::remove(nft_item);
+                Listings::<T>::remove(nft_item_with_share, seller.clone());
 
-                Self::deposit_event(Event::BuySuccess(nft_item, seller, list_info.price));
+                Self::deposit_event(Event::BuySuccess(nft_item_with_share, seller, list_info.price));
                 Ok(())
             }
 
@@ -194,23 +207,32 @@ pub mod pallet {
             #[pallet::call_index(3)]
             #[pallet::weight({0})]
             pub fn place_offer(origin: OriginFor<T>,
-                               nft_item: NftItem,
-                               offered_nfts: BoundedVec<NftItem, MaxOfferNftsLength>,
-                               token_amount: BalanceOf<T>) -> DispatchResult {
+                               nft_item_with_share: NftItemWithShare,
+                               offered_nfts: BoundedVec<NftItemWithShare, MaxOfferNftsLength>,
+                               token_amount: BalanceOf<T>,
+                               seller: T::AccountId) -> DispatchResult {
                 let sender = ensure_signed(origin)?;
-                ensure!(Listings::<T>::contains_key(nft_item), Error::<T>::NotListed);
+                ensure!(Listings::<T>::contains_key(nft_item_with_share, seller.clone()), Error::<T>::NotListed);
 
-                for offered_nft_item in offered_nfts.clone().into_iter() {
-                    let owner = NFTOwners::<T>::get(offered_nft_item).ok_or(Error::<T>::NFTNotFound)?;
-                    ensure!(owner == sender, Error::<T>::NotOwner);
+                let owned_nfts_with_share = OwnedNFTs::<T>::get(sender.clone()).unwrap_or_default();
+                for offered_nft_item_with_share in offered_nfts.clone().into_iter() {
+                    let offered_nft_item = (offered_nft_item_with_share.0, offered_nft_item_with_share.1);
+                    ensure!(NFTOwners::<T>::contains_key(offered_nft_item), Error::<T>::NFTNotFound);
+                    let owned_nft_item_with_share = owned_nfts_with_share.iter().find(|nft| nft.0 == offered_nft_item.0 && nft.1 == offered_nft_item.1);
+                    if let Some(nft_item_with_share) = owned_nft_item_with_share {
+                        ensure!(nft_item_with_share.2 >= offered_nft_item_with_share.2, Error::<T>::ShareNotEnough);
+                    } else {
+                        return Err(Error::<T>::NotOwner.into());
+                    }
                 }
 
                 let offer_item = Offer {
                     offered_nfts,
                     token_amount,
+                    buyer: sender.clone(),
                 };
 
-                Offers::<T>::mutate(nft_item, |offer_items| {
+                Offers::<T>::mutate(nft_item_with_share, seller, |offer_items| {
                     if offer_items.is_none() {
                         *offer_items = Some(BoundedVec::<Offer<T>, MaxNftsLength>::default());
                     }
@@ -219,7 +241,7 @@ pub mod pallet {
                     }
                 });
 
-                Self::deposit_event(Event::OfferPlaced(nft_item, sender, offer_item));
+                Self::deposit_event(Event::OfferPlaced(nft_item_with_share, sender, offer_item));
                 Ok(())
             }
 
@@ -236,23 +258,32 @@ pub mod pallet {
             #[pallet::call_index(4)]
             #[pallet::weight({0})]
             pub fn cancel_offer(origin: OriginFor<T>,
-                                nft_item: NftItem,
-                                offered_nfts: BoundedVec<NftItem, MaxOfferNftsLength>,
-                                token_amount: BalanceOf<T>) -> DispatchResult {
+                                nft_item_with_share: NftItemWithShare,
+                                offered_nfts: BoundedVec<NftItemWithShare, MaxOfferNftsLength>,
+                                token_amount: BalanceOf<T>,
+                                seller: T::AccountId) -> DispatchResult {
                 let sender = ensure_signed(origin)?;
-                ensure!(Listings::<T>::contains_key(nft_item), Error::<T>::NotListed);
+                ensure!(Listings::<T>::contains_key(nft_item_with_share, seller.clone()), Error::<T>::NotListed);
 
-                for offered_nft_item in offered_nfts.clone().into_iter() {
-                    let owner = NFTOwners::<T>::get(offered_nft_item).ok_or(Error::<T>::NFTNotFound)?;
-                    ensure!(owner == sender, Error::<T>::NotOwner);
+                let owned_nfts_with_share = OwnedNFTs::<T>::get(sender.clone()).unwrap_or_default();
+                for offered_nft_item_with_share in offered_nfts.clone().into_iter() {
+                    let offered_nft_item = (offered_nft_item_with_share.0, offered_nft_item_with_share.1);
+                    ensure!(NFTOwners::<T>::contains_key(offered_nft_item), Error::<T>::NFTNotFound);
+                    let owned_nft_item_with_share = owned_nfts_with_share.iter().find(|nft| nft.0 == offered_nft_item.0 && nft.1 == offered_nft_item.1);
+                    if let Some(nft_item_with_share) = owned_nft_item_with_share {
+                        ensure!(nft_item_with_share.2 >= offered_nft_item_with_share.2, Error::<T>::ShareNotEnough);
+                    } else {
+                        return Err(Error::<T>::NotOwner.into());
+                    }
                 }
 
                 let offer_item = Offer {
                     offered_nfts,
                     token_amount,
+                    buyer: sender.clone(),
                 };
 
-                Offers::<T>::mutate(nft_item, |offer_items| {
+                Offers::<T>::mutate(nft_item_with_share, seller, |offer_items| {
                     if let Some(offer_items_value) = offer_items {
                         if let Some(index) = offer_items_value.iter().position(|x| *x == offer_item) {
                             offer_items_value.remove(index);
@@ -263,7 +294,7 @@ pub mod pallet {
                     Ok(())
                 })?;
 
-                Self::deposit_event(Event::OfferCanceled(nft_item, sender, offer_item));
+                Self::deposit_event(Event::OfferCanceled(nft_item_with_share, sender, offer_item));
                 Ok(())
             }
 
@@ -280,58 +311,31 @@ pub mod pallet {
             #[pallet::call_index(5)]
             #[pallet::weight({0})]
             pub fn accept_offer(origin: OriginFor<T>,
-                                nft_item: NftItem,
-                                offered_nfts: BoundedVec<NftItem, MaxOfferNftsLength>,
-                                offered_token_amount: BalanceOf<T>) -> DispatchResult {
+                                nft_item_with_share: NftItemWithShare,
+                                offered_nfts: BoundedVec<NftItemWithShare, MaxOfferNftsLength>,
+                                offered_token_amount: BalanceOf<T>,
+                                buyer: T::AccountId) -> DispatchResult {
                 let sender = ensure_signed(origin.clone())?;
-                let list_info = Listings::<T>::get(nft_item).ok_or(Error::<T>::NotListed)?;
-                let seller = list_info.owner;
-                ensure!(seller == sender, Error::<T>::NotOwner);
+                let offers = Offers::<T>::get(nft_item_with_share, sender.clone()).ok_or(Error::<T>::NotOffered)?;
+                let offer = offers.iter().find(|offer| {
+                    offer.buyer == buyer && offer.offered_nfts == offered_nfts && offer.token_amount == offered_token_amount
+                    }).ok_or(Error::<T>::NotOffered)?;
 
-                let mut buyer_wrapper: Option<T::AccountId> = None;
+                NftPallet::<T>::transfer_nft(origin.clone(), buyer.clone(), (nft_item_with_share.0, nft_item_with_share.1), nft_item_with_share.2)?;
                 for offered_nft_item in offered_nfts.clone().into_iter() {
-                    let owner = NFTOwners::<T>::get(offered_nft_item).ok_or(Error::<T>::NFTNotFound)?;
-                    if buyer_wrapper.is_none() {
-                        buyer_wrapper = Some(owner.clone());
-                    } else if buyer_wrapper.as_ref() != Some(&owner) {
-                        return Err(Error::<T>::NotOwner.into());
-                    }
+                    NftPallet::<T>::transfer_nft(OriginFor::<T>::signed(buyer.clone()), sender.clone(), (offered_nft_item.0, offered_nft_item.1), offered_nft_item.2)?;
                 }
 
-                if let Some(buyer) = buyer_wrapper {
-                    let offer_item = Offer {
-                        offered_nfts: offered_nfts.clone(),
-                        token_amount: offered_token_amount
-                    };
-
-                    let offers = Offers::<T>::get(nft_item).ok_or(Error::<T>::NotOffered)?;
-                    let mut found_offer = false;
-                    for item in offers.iter() {
-                        if *item == offer_item {
-                            found_offer = true;
-                        }
-                    }
-                    ensure!(found_offer, Error::<T>::NotOffered);
-
-                    NftPallet::<T>::transfer_nft(origin.clone(), buyer.clone(), nft_item)?;
-                    for offered_nft_item in offered_nfts.clone().into_iter() {
-                        NftPallet::<T>::transfer_nft(OriginFor::<T>::signed(buyer.clone()), seller.clone(), offered_nft_item)?;
-                    }
-
-                    if offered_token_amount > BalanceOf::<T>::zero() {
-                       let buyer_balance = T::Currency::free_balance(&buyer.clone());
-                       ensure!(buyer_balance >= offered_token_amount, Error::<T>::InsufficientBalance);
-                       T::Currency::transfer(&buyer.clone(), &seller.clone(), offered_token_amount, frame_support::traits::ExistenceRequirement::AllowDeath)?;
-                    }
-
-                    Listings::<T>::remove(nft_item);
-                    Offers::<T>::remove(nft_item);
-
-                    Self::deposit_event(Event::OfferAccepted(seller, nft_item, buyer, offer_item));
-                } else {
-                    return Err(Error::<T>::NotOffered.into());
+                if offered_token_amount > BalanceOf::<T>::zero() {
+                   let buyer_balance = T::Currency::free_balance(&buyer.clone());
+                   ensure!(buyer_balance >= offered_token_amount, Error::<T>::InsufficientBalance);
+                   T::Currency::transfer(&buyer.clone(), &sender.clone(), offered_token_amount, frame_support::traits::ExistenceRequirement::AllowDeath)?;
                 }
 
+                Listings::<T>::remove(nft_item_with_share, sender.clone());
+                Offers::<T>::remove(nft_item_with_share, sender.clone());
+
+                Self::deposit_event(Event::OfferAccepted(sender, nft_item_with_share, buyer, offer.clone()));
                 Ok(())
             }
 
@@ -348,47 +352,64 @@ pub mod pallet {
             #[pallet::call_index(6)]
             #[pallet::weight({0})]
             pub fn reject_offer(origin: OriginFor<T>,
-                                nft_item: NftItem,
-                                offered_nfts: BoundedVec<NftItem, MaxOfferNftsLength>,
-                                offered_token_amount: BalanceOf<T>) -> DispatchResult {
+                                nft_item_with_share: NftItemWithShare,
+                                offered_nfts: BoundedVec<NftItemWithShare, MaxOfferNftsLength>,
+                                offered_token_amount: BalanceOf<T>,
+                                buyer: T::AccountId) -> DispatchResult {
                 let sender = ensure_signed(origin.clone())?;
-                let list_info = Listings::<T>::get(nft_item).ok_or(Error::<T>::NotListed)?;
-                let seller = list_info.owner;
-                ensure!(seller == sender, Error::<T>::NotOwner);
-
-                let mut buyer_wrapper: Option<T::AccountId> = None;
-                for offered_nft_item in offered_nfts.clone().into_iter() {
-                    let owner = NFTOwners::<T>::get(offered_nft_item).ok_or(Error::<T>::NFTNotFound)?;
-                    if buyer_wrapper.is_none() {
-                        buyer_wrapper = Some(owner.clone());
-                    } else if buyer_wrapper.as_ref() != Some(&owner) {
-                        return Err(Error::<T>::NotOwner.into());
+                let mut offers = Offers::<T>::get(nft_item_with_share, sender.clone()).ok_or(Error::<T>::NotOffered)?;
+                let mut remove_offer_wrap: Option<Offer<T>> = None;
+                for (i, offer) in offers.clone().into_iter().enumerate() {
+                    if offer.buyer == buyer && offer.offered_nfts == offered_nfts && offer.token_amount == offered_token_amount {
+                        offers.remove(i);
+                        remove_offer_wrap = Some(offer);
+                        break;
                     }
                 }
-
-                if let Some(buyer) = buyer_wrapper {
-                    let offer_item = Offer {
-                        offered_nfts: offered_nfts.clone(),
-                        token_amount: offered_token_amount,
-                    };
-
-                    Offers::<T>::mutate(nft_item, |offer_items| {
-                        if let Some(offer_items_value) = offer_items {
-                            if let Some(index) = offer_items_value.iter().position(|x| *x == offer_item) {
-                                offer_items_value.remove(index);
-                            } else {
-                                return Err(Error::<T>::NotOffered);
-                            }
-                        }
-                        Ok(())
-                    })?;
-
-                    Self::deposit_event(Event::OfferRejected(seller, nft_item, buyer, offer_item));
+                if let Some(remove_offer) = remove_offer_wrap {
+                    Offers::<T>::insert(nft_item_with_share, sender.clone(), offers);
+                    Self::deposit_event(Event::OfferRejected(sender, nft_item_with_share, buyer, remove_offer));
+                    Ok(())
                 } else {
                     return Err(Error::<T>::NotOffered.into());
                 }
 
-                Ok(())
+                //let list_info = Listings::<T>::get(nft_item).ok_or(Error::<T>::NotListed)?;
+                //let seller = list_info.owner;
+                //ensure!(seller == sender, Error::<T>::NotOwner);
+
+                //let mut buyer_wrapper: Option<T::AccountId> = None;
+                //for offered_nft_item in offered_nfts.clone().into_iter() {
+                //    let owner = NFTOwners::<T>::get(offered_nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                //    if buyer_wrapper.is_none() {
+                //        buyer_wrapper = Some(owner.clone());
+                //    } else if buyer_wrapper.as_ref() != Some(&owner) {
+                //        return Err(Error::<T>::NotOwner.into());
+                //    }
+                //}
+
+                //if let Some(buyer) = buyer_wrapper {
+                //    let offer_item = Offer {
+                //        offered_nfts: offered_nfts.clone(),
+                //        token_amount: offered_token_amount,
+                //    };
+
+                //    Offers::<T>::mutate(nft_item, |offer_items| {
+                //        if let Some(offer_items_value) = offer_items {
+                //            if let Some(index) = offer_items_value.iter().position(|x| *x == offer_item) {
+                //                offer_items_value.remove(index);
+                //            } else {
+                //                return Err(Error::<T>::NotOffered);
+                //            }
+                //        }
+                //        Ok(())
+                //    })?;
+
+                //    Self::deposit_event(Event::OfferRejected(seller, nft_item, buyer, offer_item));
+                //} else {
+                //    return Err(Error::<T>::NotOffered.into());
+                //}
+
             }
         }
 }
