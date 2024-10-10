@@ -373,43 +373,6 @@ pub mod pallet {
                 } else {
                     return Err(Error::<T>::NotOffered.into());
                 }
-
-                //let list_info = Listings::<T>::get(nft_item).ok_or(Error::<T>::NotListed)?;
-                //let seller = list_info.owner;
-                //ensure!(seller == sender, Error::<T>::NotOwner);
-
-                //let mut buyer_wrapper: Option<T::AccountId> = None;
-                //for offered_nft_item in offered_nfts.clone().into_iter() {
-                //    let owner = NFTOwners::<T>::get(offered_nft_item).ok_or(Error::<T>::NFTNotFound)?;
-                //    if buyer_wrapper.is_none() {
-                //        buyer_wrapper = Some(owner.clone());
-                //    } else if buyer_wrapper.as_ref() != Some(&owner) {
-                //        return Err(Error::<T>::NotOwner.into());
-                //    }
-                //}
-
-                //if let Some(buyer) = buyer_wrapper {
-                //    let offer_item = Offer {
-                //        offered_nfts: offered_nfts.clone(),
-                //        token_amount: offered_token_amount,
-                //    };
-
-                //    Offers::<T>::mutate(nft_item, |offer_items| {
-                //        if let Some(offer_items_value) = offer_items {
-                //            if let Some(index) = offer_items_value.iter().position(|x| *x == offer_item) {
-                //                offer_items_value.remove(index);
-                //            } else {
-                //                return Err(Error::<T>::NotOffered);
-                //            }
-                //        }
-                //        Ok(())
-                //    })?;
-
-                //    Self::deposit_event(Event::OfferRejected(seller, nft_item, buyer, offer_item));
-                //} else {
-                //    return Err(Error::<T>::NotOffered.into());
-                //}
-
             }
         }
 }

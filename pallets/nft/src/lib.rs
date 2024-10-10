@@ -18,7 +18,7 @@ pub mod pallet {
         use frame_support::pallet_prelude::*;
         type MaxSubNftsLength = ConstU32<10>;
         type MaxNftOwners = ConstU32<10>;
-        type MaxMetadataLength = ConstU32<16>;
+        type MaxMetadataLength = ConstU32<256>;
         type MaxCollectionsLength = ConstU32<100>;
         type MaxNftsLength = ConstU32<10000>;
         type NftItem = (H256, u32);
