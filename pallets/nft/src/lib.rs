@@ -225,6 +225,7 @@ pub mod pallet {
             /// Parameters:
             /// - `to`: The target account id for the transfer.
             /// - `nft_item`: The NFT to transfer.
+            /// - `share`: The NFT share to transfer.
             ///
             /// Emits `NFTTransferred` event when successful.
             #[pallet::call_index(2)]
@@ -283,6 +284,14 @@ pub mod pallet {
                 Ok(())
             }
 
+            /// Merge NFTs.
+            ///
+            /// The origin must be signed.
+            ///
+            /// Parameters:
+            /// - `nft_items`: The NFTs to be merged.
+            ///
+            /// Emits `NFTMerged` event when successful.
             #[pallet::call_index(3)]
             #[pallet::weight(T::WeightInfo::merge_nfts())]
             pub fn merge_nfts(origin: OriginFor<T>, nft_items: BoundedVec::<NftItem, MaxSubNftsLength>) -> DispatchResult {
@@ -320,6 +329,14 @@ pub mod pallet {
                 Ok(())
             }
 
+            /// Split the merged NFT.
+            ///
+            /// The origin must be signed.
+            ///
+            /// Parameters:
+            /// - `nft_item`: The merged NFT to be splited.
+            ///
+            /// Emits `NFTSplited` event when successful.
             #[pallet::call_index(4)]
             #[pallet::weight(T::WeightInfo::split_nft())]
             pub fn split_nft(origin: OriginFor<T>, nft_item: NftItem) -> DispatchResult {
