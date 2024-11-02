@@ -63,6 +63,7 @@ impl pallet_balances::Config for Test {
 
 impl pallet_nft::Config for Test {
     type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = ();
 }
 
 impl pallet_nft_market::Config for Test {

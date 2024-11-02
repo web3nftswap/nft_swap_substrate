@@ -237,6 +237,26 @@ pub mod pallet {
                 let nft_details = NFTDetails::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
                 if let Some(merged_nft) = nft_details.merged_nft {
                     ensure!(merged_nft == nft_item, Error::<T>::NFTIsFrozen);
+
+                    let nft_details = NFTDetails::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                    for (index, sub_nft_item) in nft_details.sub_nfts.iter().enumerate() {
+                        if index == 0 {
+                            continue;
+                        }
+                        // update OwnedNFTs
+                        let mut sender_owned_nfts = OwnedNFTs::<T>::get(&sender).ok_or(Error::<T>::NFTNotFound)?;
+                        sender_owned_nfts.retain(|nft_item| *nft_item != (sub_nft_item.0, sub_nft_item.1, 100));
+                        OwnedNFTs::<T>::insert(&sender, sender_owned_nfts);
+                        let mut receiver_owned_nfts = OwnedNFTs::<T>::get(&to).unwrap_or_default();
+                        receiver_owned_nfts.try_push((sub_nft_item.0, sub_nft_item.1, 100)).unwrap_or_default();
+                        OwnedNFTs::<T>::insert(&to, receiver_owned_nfts);
+
+                        // update NFTOwners
+                        let mut nft_owners = NFTOwners::<T>::get(sub_nft_item).ok_or(Error::<T>::NFTNotFound)?;
+                        nft_owners.try_push(to.clone()).unwrap_or_default();
+                        nft_owners.retain(|owner| *owner != sender);
+                        NFTOwners::<T>::insert(&sub_nft_item, nft_owners);
+                    }
                 }
 
                 // Retrieve sender's owned NFTs
@@ -279,8 +299,6 @@ pub mod pallet {
                     nft_owners.retain(|owner| *owner != sender);
                 }
                 NFTOwners::<T>::insert(&nft_item, nft_owners);
-
-                Self::deposit_event(Event::NFTTransferred(sender, to, nft_item));
                 Ok(())
             }
 
@@ -301,9 +319,18 @@ pub mod pallet {
 
                 ensure!(nft_items.len() > 1, Error::<T>::NFTNoSubNfts);
 
+                let sender_owned_nfts = OwnedNFTs::<T>::get(&sender).ok_or(Error::<T>::NFTNotFound)?;
                 for (index, nft_item) in nft_items.iter().enumerate() {
                     let mut nft_details = NFTDetails::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
                     ensure!(nft_details.merged_nft.is_none(), Error::<T>::NFTAlreadyMerged);
+                    ensure!(
+                        sender_owned_nfts.iter().any(|&nft| nft.0 == nft_item.0 && nft.1 == nft_item.1),
+                        Error::<T>::NotOwner
+                    );
+                    ensure!(
+                        sender_owned_nfts.iter().any(|&nft| nft.0 == nft_item.0 && nft.1 == nft_item.1 && nft.2 == 100),
+                        Error::<T>::NFTCanNotMergeOrSplit
+                    );
 
                     if index == 0 {
                         merged_nft = *nft_item;
@@ -343,6 +370,16 @@ pub mod pallet {
                 let sender = ensure_signed(origin)?;
                 let nft_details = NFTDetails::<T>::get(nft_item).ok_or(Error::<T>::NFTNotFound)?;
                 let sub_nfts = nft_details.sub_nfts.clone();
+
+                let sender_owned_nfts = OwnedNFTs::<T>::get(&sender).ok_or(Error::<T>::NFTNotFound)?;
+                ensure!(
+                    sender_owned_nfts.iter().any(|&nft| nft.0 == nft_item.0 && nft.1 == nft_item.1),
+                    Error::<T>::NotOwner
+                );
+                ensure!(
+                    sender_owned_nfts.iter().any(|&nft| nft.0 == nft_item.0 && nft.1 == nft_item.1 && nft.2 == 100),
+                    Error::<T>::NFTCanNotMergeOrSplit
+                );
 
                 ensure!(!nft_details.merged_nft.is_none(), Error::<T>::NFTNotMerged);
                 if let Some(merged_nft) = nft_details.merged_nft {
