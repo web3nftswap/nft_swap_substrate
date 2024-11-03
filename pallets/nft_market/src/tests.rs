@@ -375,3 +375,30 @@ fn buy_nft_fail_when_insufficient_balance() {
         assert_eq!(NFTOwners::<Test>::get((collection_id, 0)), Some(nft0_owners));
     })
 }
+
+#[test]
+fn update_list() {
+    new_test_ext().execute_with(|| {
+        let account_id: AccountId = 1;
+        let max_items: u32 = 100;
+        let metainfo = BoundedVec::try_from(vec![0, 1]).unwrap();
+        assert_ok!(NftModule::create_collection(RuntimeOrigin::signed(account_id), max_items, metainfo.clone()));
+        
+        let collection_id = H256::from_slice(&blake2_256(&metainfo.clone()));
+        let metainfo1 = BoundedVec::try_from(vec![1, 2]).unwrap();
+        assert_ok!(NftModule::mint_nft(RuntimeOrigin::signed(account_id), collection_id, metainfo1.clone()));
+
+        let price = 10_000_000;
+        let new_price = 20_000_000;
+        let updated_list_info = ListInfo {
+            price: new_price,
+            owner: account_id.clone(),
+        };
+        let share = 40;
+        assert_ok!(NftMarketModule::list_nft(RuntimeOrigin::signed(account_id), (collection_id, 0, share), price));
+        assert_ok!(NftMarketModule::update_list_price(RuntimeOrigin::signed(account_id), (collection_id, 0, share), new_price));
+        assert_eq!(Listings::<Test>::get((collection_id, 0, share), account_id), Some(updated_list_info));
+    })
+}
+
+

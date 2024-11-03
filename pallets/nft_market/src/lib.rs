@@ -97,6 +97,8 @@ pub mod pallet {
             OfferAccepted(T::AccountId, NftItemWithShare, T::AccountId, Offer<T>),
             /// An NFT offer was rejected.
             OfferRejected(T::AccountId, NftItemWithShare, T::AccountId, Offer<T>),
+            /// NFT price updated.
+            NftPriceUpdated(T::AccountId, NftItemWithShare),
         }
 
         #[pallet::error]
@@ -387,6 +389,33 @@ pub mod pallet {
                 } else {
                     return Err(Error::<T>::NotOffered.into());
                 }
+            }
+            /// Update the NFT's price.
+            ///
+            /// The origin must be signed.
+            ///
+            /// Parameters:
+            /// - `nft_item_with_share`: The NFT to be unlisted.
+            /// - `price`: The new price of the NFT.
+            ///
+            /// Emits `NftUnlisted` event when successful.
+            #[pallet::call_index(7)]
+            #[pallet::weight({10_000})]
+            pub fn update_list_price(origin: OriginFor<T>, nft_item_with_share: NftItemWithShare, price: BalanceOf<T>) -> DispatchResult {
+                let sender = ensure_signed(origin)?;
+                let nft_item = (nft_item_with_share.0, nft_item_with_share.1);
+                ensure!(NFTOwners::<T>::contains_key(nft_item), Error::<T>::NFTNotFound);
+
+                Listings::<T>::mutate(nft_item_with_share, &sender, |list_info| {
+                    *list_info = Some(ListInfo {
+                        owner: sender.clone(),
+                        price,
+                    });
+                });
+
+                Self::deposit_event(Event::NftPriceUpdated(sender, nft_item_with_share));
+
+                Ok(())
             }
         }
 }
